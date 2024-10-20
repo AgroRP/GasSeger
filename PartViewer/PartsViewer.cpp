@@ -7,6 +7,8 @@
 #include <pcl/PolygonMesh.h>
 #include <pcl/conversions.h>  
 #include <pcl/visualization/pcl_visualizer.h>
+#include <pcl/segmentation/sac_segmentation.h>
+#include <pcl/filters/extract_indices.h>
 #include <pcl/features/don.h>
 #include <string>
 #include <vtkPicker.h>
@@ -16,129 +18,48 @@
 #include <iostream>
 #include <filesystem>
 #include <vtkRenderer.h>
+#include <pcl/features/normal_3d.h>
 
 namespace fs = std::filesystem;
-char IntersectBox(const double bounds[6], const double origin[3], const double dir[3],
-	double coord[3], double& t, double tolerance = 0.0)
+
+void SegPart(const std::shared_ptr<const pcl::PointCloud<pcl::PointXYZ>> cloud)
 {
-	bool inside = true;
-	char quadrant[3];
-	int i, whichPlane = 0;
-	double maxT[3], candidatePlane[3];
+	pcl::PointCloud<pcl::Normal>::Ptr cloud_normals(new pcl::PointCloud<pcl::Normal>);
+	pcl::search::KdTree<pcl::PointXYZ >::Ptr tree(new pcl::search::KdTree<pcl::PointXYZ >);
+	pcl::NormalEstimation<pcl::PointXYZ, pcl::Normal> normal_est;
+	normal_est.setSearchMethod(tree);
+	normal_est.setInputCloud(cloud);
+	normal_est.setKSearch(50);
+	normal_est.compute(*cloud_normals);
 
-	// Make sure tolerance is non-zero
-	double tol = (tolerance <= 0 ? FLT_EPSILON : tolerance);
-
-	// Make sure bounds are not degenerate (i.e., have positive volume); pad by
-	// tolerance if it is.
-	double bds[6];
-	for (i = 0; i < 3; ++i)
-	{
-		if ((bounds[2 * i + 1] - bounds[2 * i]) > 0)
-		{
-			bds[2 * i] = bounds[2 * i];
-			bds[2 * i + 1] = bounds[2 * i + 1];
-		}
-		else
-		{
-			bds[2 * i] = bounds[2 * i] - tol;
-			bds[2 * i + 1] = bounds[2 * i + 1] + tol;
-		}
-	}
-
-	//  First find closest planes
-	//
-	for (i = 0; i < 3; i++)
-	{
-		if (origin[i] < bds[2 * i])
-		{
-			quadrant[i] = 0;
-			candidatePlane[i] = bds[2 * i];
-			inside = false;
-		}
-		else if (origin[i] > bds[2 * i + 1])
-		{
-			quadrant[i] = 1;
-			candidatePlane[i] = bds[2 * i + 1];
-			inside = false;
-		}
-		else
-		{
-			quadrant[i] = 2;
-		}
-	}
-
-	//  Check whether origin of ray is inside bbox
-	//
-	if (inside)
-	{
-		coord[0] = origin[0];
-		coord[1] = origin[1];
-		coord[2] = origin[2];
-		t = 0;
-		return 1;
-	}
-
-	//  Calculate parametric distances to plane
-	//
-	for (i = 0; i < 3; i++)
-	{
-		if (quadrant[i] != 2 && dir[i] != 0.0)
-		{
-			maxT[i] = (candidatePlane[i] - origin[i]) / dir[i];
-		}
-		else
-		{
-			maxT[i] = -1.0;
-		}
-	}
-
-	//  Find the largest parametric value of intersection
-	//
-	for (i = 0; i < 3; i++)
-	{
-		if (maxT[whichPlane] < maxT[i])
-		{
-			whichPlane = i;
-		}
-	}
-
-	//  Check for valid intersection along line
-	//
-	if (maxT[whichPlane] > 1.0 || maxT[whichPlane] < 0.0)
-	{
-		return 0;
-	}
-	else
-	{
-		t = maxT[whichPlane];
-	}
-
-	//  Intersection point along line is okay.  Check bbox.
-	//
-	for (i = 0; i < 3; i++)
-	{
-		if (whichPlane != i)
-		{
-			coord[i] = origin[i] + maxT[whichPlane] * dir[i];
-			if ((coord[i] < bds[2 * i] - tol) || (coord[i] > bds[2 * i + 1] + tol))
-			{
-				return 0;
-			}
-		}
-		else
-		{
-			coord[i] = candidatePlane[i];
-		}
-	}
-
-	return 1;
+	pcl::SACSegmentationFromNormals<pcl::PointXYZ, pcl::Normal> seg;
+	pcl::ModelCoefficients::Ptr coefficients_plane(new pcl::ModelCoefficients), coefficients_cylinder(new pcl::ModelCoefficients);
+	pcl::PointIndices::Ptr inliers_plane(new pcl::PointIndices), inliers_cylinder(new pcl::PointIndices);
+	// ------------------------点云分割，提取平面上的点--------------------------
+	seg.setOptimizeCoefficients(true);
+	seg.setModelType(pcl::SACMODEL_NORMAL_PLANE);
+	seg.setNormalDistanceWeight(0.1);
+	seg.setMethodType(pcl::SAC_RANSAC);
+	seg.setMaxIterations(100);
+	seg.setDistanceThreshold(0.03);
+	seg.setInputCloud(cloud);
+	seg.setInputNormals(cloud_normals);
+	seg.segment(*inliers_plane, *coefficients_plane);//获取平面模型系数和平面上的点
+	cout << "Plane coefficients: " << *coefficients_plane << endl;
+	//----------------------------------提取平面---------------------------------
+	pcl::ExtractIndices<pcl::PointXYZ > extract;
+	extract.setInputCloud(cloud);
+	extract.setIndices(inliers_plane);
+	extract.setNegative(false);
+	pcl::PointCloud<pcl::PointXYZ >::Ptr cloud_plane(new pcl::PointCloud<pcl::PointXYZ >());
+	extract.filter(*cloud_plane);
+	cout << "PointCloud representing the planar component: " << cloud_plane->points.size() << " data points." << endl;
 }
 
 using namespace pcl;
 using PointT = pcl::PointXYZ;
 
-void ClusterViewer(std::vector<pcl::PointCloud<PointT>::Ptr> clouds)
+void ClusterViewer(std::map<std::string, pcl::PointCloud<PointT>::Ptr> clouds)
 {
 	boost::shared_ptr<pcl::visualization::PCLVisualizer> viewer(new pcl::visualization::PCLVisualizer("3D PointCloud Viewer"));
 	int v2;
@@ -180,7 +101,7 @@ void ClusterViewer(std::vector<pcl::PointCloud<PointT>::Ptr> clouds)
 						double* bound = ele.second.actor->GetBounds();
 						double bounds[6] = { bound[0],bound[1],bound[2],bound[3],bound[4],bound[5] };
 						;
-						if (IntersectBox(ele.second.actor->GetBounds(), Cam.pos, qdir, HitPos, t))
+						if (vtkBox::IntersectBox(ele.second.actor->GetBounds(), Cam.pos, qdir, HitPos, t))
 						{
 							actor_name = ele.first;
 							actor = ele.second.actor;
@@ -209,16 +130,28 @@ void ClusterViewer(std::vector<pcl::PointCloud<PointT>::Ptr> clouds)
 				}
 			}
 		});
+
+	viewer->registerKeyboardCallback([&LastActor, &clouds, &LastActor_name](const pcl::visualization::KeyboardEvent event)
+		{
+			if (event.keyDown() && event.getKeyCode() == 'a')
+			{
+				if (LastActor)
+				{
+					auto cloud = clouds[LastActor_name];
+
+				}
+			}
+
+		});
+
+
 	for (auto& cloud : clouds)
 	{
 		float r = (rand() % 65536) / 140000.f + 0.2f;
 		float g = (rand() % 65536) / 140000.f + 0.2f;
 		float b = (rand() % 65536) / 140000.f + 0.2f;
-		char sID[10];
-		sprintf(sID, "%d", ID++);
-		std::string actor_name = std::string("cluster_").append(sID);
-		viewer->addPointCloud(cloud, actor_name, v2);
-		viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_COLOR, r, g, b, actor_name);
+		viewer->addPointCloud(cloud.second, cloud.first, v2);
+		viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_COLOR, r, g, b, cloud.first);
 	}
 
 	// 添加坐标系
@@ -235,10 +168,8 @@ void ClusterViewer(std::vector<pcl::PointCloud<PointT>::Ptr> clouds)
 
 int main(int argc, char* argv[])
 {
-
-
 	fs::path folderPath = argv[1];
-	std::vector<pcl::PointCloud<PointT>::Ptr> PCs;
+	std::map<std::string, pcl::PointCloud<PointT>::Ptr> PCs;
 	for (const auto& entry : fs::directory_iterator(folderPath)) {
 		if (!fs::is_directory(entry)) {
 			// Load cloud in blob format
@@ -248,7 +179,7 @@ int main(int argc, char* argv[])
 			std::cout << "Loading " << entry.path().filename().string() << std::endl;
 			pcl::fromPCLPointCloud2(blob, *cloud);
 			std::cout << "done.\n";
-			PCs.push_back(cloud);
+			PCs.emplace(entry.path().filename().string(), cloud);
 		}
 	}
 
