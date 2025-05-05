@@ -340,6 +340,7 @@ void GaussianSeger::LaunchViewer()
 		});
 	ShowClouds();
 
+	// 自动提取茎干参数
 	//static_infos["Stem.pcd"] = CalculateStem(clouds["Stem.pcd"], "Stem", true);
 
 	while (!viewer->wasStopped())
@@ -352,6 +353,9 @@ int main(
 	int argc,
 	char* argv[])
 {
+	// 注意：：
+	// folderPath下有且仅有一组植株点云，必须包含唯一的“Stem.pcd”文件（小写），其余以Leaf_{i}.pcd命名
+
 	fs::path folderPath = argv[1];
 	GaussianSeger Seger = GaussianSeger();
 	for (const auto& entry : fs::directory_iterator(folderPath))

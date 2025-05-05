@@ -37,6 +37,7 @@ class FixedCurve : public pcl::on_nurbs::FittingCurve
 	}
 };
 
+// PCA初始化
 ON_NurbsCurve initNurbsCurvePCAOffset(
 	int order,
 	const on_nurbs::vector_vec3d& data,
@@ -129,6 +130,7 @@ ON_NurbsCurve initNurbsCurvePCAOffset(
 }
 
 
+// 基于分块初始化
 ON_NurbsCurve initNurbsCurveRef(
 	int order,
 	const on_nurbs::vector_vec3d& data,
@@ -161,6 +163,8 @@ ON_NurbsCurve initNurbsCurveRef(
 		auto& ref_point = ref[i];
 		nurbs.SetCV(i + 2, ON_3dPoint(ref_point(0), ref_point(1), ref_point(2)));
 	}
+
+	// 两端根据切线延长
 	nurbs.SetCV(ncps - 2,
 		ON_3dPoint(ref[ncps - 5](0) * 2.f - ref[ncps - 6](0),
 			ref[ncps - 5](1) * 2.f - ref[ncps - 6](1),
@@ -207,6 +211,7 @@ GaussianSeger::GaussianSeger()
 	Nodes.clear();
 }
 
+// 输出节点模型
 void GaussianSeger::DumpNodes()
 {
 	Nodes.clear();
@@ -324,6 +329,7 @@ void GaussianSeger::DumpNodes()
 	std::cout << "\n]\n} "<< std::endl;
 }
 
+//统计局部信息
 void GaussianSeger::StaticParts(
 	std::vector<PointCloud<PointT>::Ptr> SelectedClouds,
 	std::vector<Eigen::Vector3f> SelectedTangent,
@@ -351,6 +357,8 @@ void GaussianSeger::StaticParts(
 	total_width = 0.;
 	bool LastValid = false;
 	CulledNum = 0;
+
+	// 准备节点模型
 	auto CurNodes = AllNodes.find(CurrentCloudId);
 	if (CurNodes != AllNodes.end())
 	{
@@ -450,7 +458,8 @@ void GaussianSeger::StaticParts(
 			if (!isnan(area))
 				total_area += area;
 		}
-
+		
+		// 构造节点
 		if(node_t + node_step > std::ceil(node_t))
 		{
 			Node node;
@@ -479,6 +488,8 @@ void GaussianSeger::StaticParts(
 	}
 }
 
+
+// 点云切分采样
 void GaussianSeger::SliceParts(
 	PointCloud<PointT>::Ptr downsampled_cloud,
 	ON_NurbsCurve CurrentCurve,
@@ -611,6 +622,7 @@ void GaussianSeger::SliceParts(
 	AllPartNum = SelectedClouds.size();
 }
 
+// 栅格降采样
 PointCloud<PointT>::Ptr GaussianSeger::DownSample(
 	PointCloud<PointT>::Ptr cloud,
 	const float leaf_size)
@@ -626,6 +638,7 @@ PointCloud<PointT>::Ptr GaussianSeger::DownSample(
 	return downsampled_cloud;
 }
 
+// 曲线拟合
 ON_NurbsCurve GaussianSeger::SimpleFitCurve(
 	PointCloud<PointT>::Ptr cloud,
 	unsigned n_control_points,
@@ -652,6 +665,7 @@ ON_NurbsCurve GaussianSeger::SimpleFitCurve(
 	return fit.m_nurbs;
 }
 
+// 计算叶片参数
 std::string GaussianSeger::CalculatePart(
 	PointCloud<PointT>::Ptr cloud,
 	std::string cloud_id,
@@ -718,6 +732,7 @@ std::string GaussianSeger::CalculatePart(
 
 	bool bReverse = false;
 
+	// 叶倾角
 	{
 		auto startTangent = SelectedTangent[StartIndex];
 		auto startPos = SelectedPos[StartIndex];
@@ -785,6 +800,7 @@ std::string GaussianSeger::CalculatePart(
 	double total_area;
 	double total_width;
 	int CulledNum;
+	//叶长、叶宽
 	StaticParts(
 		SelectedClouds,
 		SelectedTangent,
@@ -797,6 +813,7 @@ std::string GaussianSeger::CalculatePart(
 		total_width,
 		CulledNum);
 
+	// 输出信息，此信息根据点云名称缓存
 	std::ostringstream static_info;
 	static_info << "total length		  ::  " << length << "\n";
 	AllPartNum -= CulledNum;
@@ -825,7 +842,7 @@ Eigen::Vector3d GetMean(
 	return on_nurbs::NurbsTools::computeMean(Data.interior);
 }
 
-// 拆分采样结果
+// 将采样结果通过调整距离阈值迭代进行聚类，直到分为1-3块
 
 int SplitClusters(
 	PointCloud<PointT>::Ptr InputCloud,
@@ -932,7 +949,7 @@ int SplitClusters(
 	return 2;
 }
 
-
+// 根据索引将点云划分
 void ExtractBoth(
 	PointCloud<PointT>::Ptr Input,
 	Indices InIndices,
@@ -950,6 +967,7 @@ void ExtractBoth(
 	}
 }
 
+// 迭代采样，完成分块
 void IterSampleFromPoint(
 	PointCloud<PointT>::Ptr InCloud,
 	Eigen::Vector3d init_pos,
@@ -1026,6 +1044,7 @@ void IterSampleFromPoint(
 	} while (true);
 }
 
+// 初始化分离半径+迭代采样
 void IterSample(
 	PointCloud<PointT>::Ptr InCloud,
 	on_nurbs::vector_vec3d& OutPoints,
@@ -1169,6 +1188,7 @@ void ExtractLocalProperty(
 	eigenvalues /= indices.size();
 }
 
+// 提取茎干信息
 std::string GaussianSeger::CalculateStem(
 	PointCloud<PointT>::Ptr cloud,
 	std::string cloud_id,
