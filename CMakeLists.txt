@@ -14,4 +14,5 @@ project ("GasSeger")
 # Include sub-projects.
 # add_subdirectory ("pcl")
 add_subdirectory ("GasSeger")
-add_subdirectory ("PartViewer")
+# add_subdirectory ("PartViewer")
+# add_subdirectory ("ReCon")

@@ -1,267 +1,382 @@
 ﻿#include "GasSeger.h"
 
-#include <iostream>
-#include <pcl/io/pcd_io.h>
-#include <pcl/io/obj_io.h>  
-#include <pcl/io/ply_io.h>  
-#include <pcl/PolygonMesh.h>
-#include <pcl/conversions.h>  
-#include <pcl/visualization/pcl_visualizer.h>
-#include <pcl/features/don.h>
-#include <string>
-
-#include <pcl/features/normal_3d_omp.h>
-#include <pcl/filters/conditional_removal.h>
-#include <pcl/filters/extract_indices.h>
-#include <pcl/segmentation/extract_clusters.h>
-#include <pcl/filters/voxel_grid.h>
-#include <pcl/filters/statistical_outlier_removal.h>
-
-#include <pcl/gpu/segmentation/gpu_extract_clusters.h>
-#include <pcl/gpu/octree/octree.hpp>
-#include <pcl/segmentation/sac_segmentation.h>
-// 可视化mesh模型和点云
-
-#define USE_GPU 1
-namespace fs = std::filesystem;
-
+namespace fs = boost::filesystem;
 using namespace pcl;
-#if USE_GPU
-using PointT = pcl::PointXYZ;
-#else
-using PointT = pcl::PointXYZRGBNormal;
-#endif
-using PointNT = pcl::Normal;
-using PointOutT = pcl::PointNormal;
-using SearchPtr = pcl::search::Search<PointT>::Ptr;
 
-template<typename ExtractPointType>
-typename pcl::PointCloud<ExtractPointType>::Ptr Extract(typename pcl::PointCloud<ExtractPointType>::Ptr cloud, pcl::PointIndices::Ptr inliers_plane, bool Negtive = true)
+
+void VisualizeCurve(
+	ViewPTR viewer,
+	std::string cloud_id,
+	PointCloud<PointCT>::Ptr cloud,
+	double r,
+	double g,
+	double b,
+	bool show_cps)
 {
-	ExtractIndices<ExtractPointType > extract;
-	extract.setInputCloud(cloud);
-	extract.setIndices(inliers_plane);
-	extract.setNegative(Negtive);
-	typename pcl::PointCloud<ExtractPointType>::Ptr new_cloud(new pcl::PointCloud<ExtractPointType>());
-	extract.filter(*new_cloud);
-	return new_cloud;
+	for (std::size_t i = 0; i < cloud->size() - 1; i++)
+	{
+		PointCT& p1 = cloud->at(i);
+		PointCT& p2 = cloud->at(i + 1);
+		std::ostringstream os;
+		os << cloud_id << "cur_line_" << r << "_" << g << "_" << b << "_" << i;
+		viewer->addLine<PointCT>(p1, p2, r, g, b, os.str());
+	}
 }
 
-void SegPart(pcl::PointCloud<PointT>::Ptr& cloud, pcl::PointCloud<PointNT>::Ptr& cloud_normals)
+void VisualDir(
+	double x,
+	double y,
+	double z,
+	double x2,
+	double y2,
+	double z2,
+	double r,
+	double g,
+	double b,
+	std::string id)
 {
-	cout << "Input cloud: " << cloud->points.size() << " data points." << endl;
-	SACSegmentationFromNormals<PointT, PointNT> seg;
-	pcl::ModelCoefficients::Ptr coefficients_plane(new pcl::ModelCoefficients);
-	pcl::PointIndices::Ptr inliers_plane(new pcl::PointIndices);
-	// ------------------------点云分割，提取平面上的点--------------------------
-	seg.setOptimizeCoefficients(true);
-	seg.setModelType(pcl::SACMODEL_PLANE);
-	seg.setNormalDistanceWeight(0.2);
-	seg.setMethodType(pcl::SAC_RANSAC);
-	seg.setMaxIterations(100);
-	seg.setDistanceThreshold(0.3);
-	seg.setInputCloud(cloud);
-	seg.setInputNormals(cloud_normals);
-	seg.segment(*inliers_plane, *coefficients_plane);//获取平面模型系数和平面上的点
-	cout << "Plane coefficients: " << *coefficients_plane << endl;
-	//----------------------------------提取平面以外的---------------------------------
-	cloud = Extract<PointT>(cloud, inliers_plane);
-	cloud_normals = Extract<PointNT>(cloud_normals, inliers_plane);
-	cout << "PointCloud representing the planar component: " << cloud->points.size() << " data points." << endl;
-	return;
-
 }
-void meshPointCloudandViewer(pcl::PointCloud<PointT>::Ptr& cloud)
+
+void VisualTagent(
+	ViewPTR viewer,
+	std::string cloud_id,
+	int id,
+	ON_3dPoint& Point,
+	ON_3dVector& Vector)
 {
-	boost::shared_ptr<pcl::visualization::PCLVisualizer> viewer(new pcl::visualization::PCLVisualizer("3D PointCloud Viewer"));
-	int v2;
-	viewer->createViewPort(0.0, 0.0, 1.0, 1.0, v2);  // 左侧窗口
-	viewer->setBackgroundColor(0.0, 0.0, 0.0, v2);  // 黑色背景
-	viewer->addText("Original PointCloud", 10, 10, "vp1_text", v2);  // 标题
-	pcl::visualization::PointCloudColorHandlerRGBField<PointT> cloud_color_handler(cloud);  // 绿色
-	viewer->addPointCloud(cloud, "original_cloud", v2);
-	viewer->setPointCloudRenderingProperties(pcl::visualization::PCL_VISUALIZER_COLOR, 0.5, 0.8, .5, "original_cloud");
+	auto VectorEnd = Point + 0.1 * Vector;
+	std::ostringstream os;
+	os << cloud_id << "_Tangent_" << id;
+	viewer->addLine<PointCT>(
+		PointCT(Point.x, Point.y, Point.z, 255, 255, 255),
+		PointCT(VectorEnd.x, VectorEnd.y, VectorEnd.z, 255, 255, 255),
+		1.0,
+		1.0,
+		0,
+		os.str());
+}
 
-	// 添加坐标系
-   /* viewer->addCoordinateSystem(0.1);
-	viewer->initCameraParameters();*/
+void GaussianSeger::ShowClouds()
+{
+	InitCloudColor();
+	for (auto& cloud : clouds)
+	{
+		auto color = cloudColors[cloud.first];
+		viewer->addPointCloud(cloud.second, cloud.first, ViewportID);
+		viewer->setPointCloudRenderingProperties(
+			visualization::PCL_VISUALIZER_COLOR,
+			color[0],
+			color[1],
+			color[2],
+			cloud.first);
+	}
+}
 
-	// 可视化循环
+
+//bool bShowCylinder = false;
+//bool bShowCurve = true;
+
+
+//std::vector<PointCloud<PointT>::Ptr> CachedClouds;
+//std::vector<PointCloud<PointCT>::Ptr> CachedColorClouds;
+//ON_NurbsCurve Stem_Curve;
+//Eigen::Vector3f Stem_Center;
+
+
+void GaussianSeger::InitializeViewer()
+{
+	viewer->createViewPort(0.0, 0.0, 1.0, 1.0, ViewportID);
+	viewer->setBackgroundColor(0.0, 0.0, 0.0, ViewportID);
+	viewer->addText("Original PointCloud", 10, 10, "Clusters Viewer", ViewportID);
+
+	viewer->addText("statistical info", 0, 300, 18, 1, 0, 1, "static_info");
+}
+
+void GaussianSeger::LaunchViewer()
+{
+	InitializeViewer();
+
+	std::map<std::string, std::string> static_infos;
+	vtkActor* LastActor = nullptr;
+	std::string LastActor_name = "Null";
+	double SelectionDistance = 100;
+
+
+	// select cloud
+	viewer->registerMouseCallback(
+		[&LastActor,
+		&LastActor_name,
+		&SelectionDistance,
+		&static_infos,
+		this](
+			const visualization::MouseEvent& event)
+		{
+			if (event.getButton() == visualization::MouseEvent::LeftButton &&
+				event.getType() == visualization::MouseEvent::MouseButtonPress)
+			{
+				std::vector<visualization::Camera> Cams;
+				viewer->getCameras(Cams);
+
+				auto Cam = Cams[0];
+				double* WS = Cam.window_size;
+				double offset[2] = {
+					tan(Cam.fovy * 0.5) * (event.getY() / WS[1] - 0.5) * 2.0,
+					tan(Cam.fovy * 0.5) * ((event.getX() - 0.5 * WS[0]) / WS[1]) *
+					2.0
+				};
+				double dir[3] = {
+					(Cam.focal[0] - Cam.pos[0]),
+					(Cam.focal[1] - Cam.pos[1]),
+					(Cam.focal[2] - Cam.pos[2])
+				};
+				double len = sqrt(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]);
+				double forward_dir[3] = { dir[0] / len, dir[1] / len, dir[2] / len };
+				double up[3] = { Cam.view[0], Cam.view[1], Cam.view[2] };
+				double right[3] = {
+					forward_dir[1] * up[2] - forward_dir[2] * up[1],
+					forward_dir[2] * up[0] - forward_dir[0] * up[2],
+					forward_dir[0] * up[1] - forward_dir[1] * up[0]
+				};
+				double qdir[3] = {
+					forward_dir[0] + offset[0] * up[0] + offset[1] * right[0],
+					forward_dir[1] + offset[0] * up[1] + offset[1] * right[1],
+					forward_dir[2] + offset[0] * up[2] + offset[1] * right[2]
+				};
+				qdir[0] *= SelectionDistance;
+				qdir[1] *= SelectionDistance;
+				qdir[2] *= SelectionDistance;
+				vtkActor* actor = nullptr;
+				std::string actor_name = "Null";
+				if (event.getKeyboardModifiers() == visualization::KeyboardEvent::Alt ||
+					event.getKeyboardModifiers() == visualization::KeyboardEvent::Ctrl)
+					for (auto ele : *viewer->getCloudActorMap())
+					{
+						if (ele.first[0] == '_' || ele.first[0] == 'g')
+							continue;
+						double HitPos[3];
+						double t;
+						double* bound = ele.second.actor->GetBounds();
+						double bounds[6] = {
+							bound[0], bound[1], bound[2], bound[3], bound[4], bound[5]
+						};
+						if (vtkBox::IntersectBox(
+							ele.second.actor->GetBounds(),
+							Cam.pos,
+							qdir,
+							HitPos,
+							t))
+						{
+							actor_name = ele.first;
+							actor = ele.second.actor;
+							break;
+						}
+					}
+				if (event.getKeyboardModifiers() == visualization::KeyboardEvent::Ctrl)
+					if (LastActor)
+					{
+						auto last_cloud = viewer->getCloudActorMap()->find(LastActor_name);
+						if (last_cloud != viewer->getCloudActorMap()->end())
+						{
+							auto color = cloudColors[LastActor_name];
+							viewer->setPointCloudRenderingProperties(
+								visualization::PCL_VISUALIZER_COLOR,
+								color[0],
+								color[1],
+								color[2],
+								LastActor_name);
+							LastActor = nullptr;
+							LastActor_name = "Null";
+						}
+						else
+						{
+							auto color = cloudColors[LastActor_name];
+							viewer->addPointCloud(clouds[LastActor_name], LastActor_name, ViewportID);
+							viewer->setPointCloudRenderingProperties(
+								visualization::PCL_VISUALIZER_COLOR,
+								color[0],
+								color[1],
+								color[2],
+								LastActor_name);
+						}
+					}
+				if (actor)
+				{
+					if (event.getKeyboardModifiers() == visualization::KeyboardEvent::Alt)
+					{
+						viewer->removePointCloud(actor_name);
+						return;
+					}
+					LastActor = actor;
+					LastActor_name = actor_name;
+					auto info = static_infos.find(LastActor_name);
+					if (info != static_infos.end())
+					{
+						viewer->updateText(info->second, 0, 300, "static_info");
+					}
+					else
+					{
+						viewer->updateText("no valid statistical info", 0, 300, "static_info");
+					}
+					std::cout << actor_name << std::endl;
+					auto color = cloudColors[actor_name];
+
+					viewer->setPointCloudRenderingProperties(
+						visualization::PCL_VISUALIZER_COLOR,
+						std::min(color[0] + 0.1, 1.),
+						std::min(color[1] + 0.1, 1.),
+						std::min(color[2] + 0.1, 1.),
+						actor_name);
+				}
+			}
+		});
+
+	// do calculation 
+	bool bCal = false;
+	viewer->registerKeyboardCallback(
+		[&bCal, &LastActor, this, &LastActor_name, &static_infos](
+			const visualization::KeyboardEvent event)
+		{
+			if (event.keyDown() && event.getKeyCode() == 'n')
+			{
+				if (LastActor && !bCal)
+				{
+					std::string actor_name = LastActor_name;
+					if(actor_name.starts_with("Stem"))
+					{
+						static_infos["Stem.pcd"] = CalculateStem(clouds["Stem.pcd"], "Stem", true);
+						return;
+					}
+					bCal = true;
+					auto center = LastActor->GetCenter();
+
+					std::vector<visualization::Camera> Cams;
+					viewer->getCameras(Cams);
+					auto Cam = Cams[0];
+					double up[3] = { Cam.view[0], Cam.view[1], Cam.view[2] };
+					double* cam_pos = LastActor->GetCenter();
+					double text_offset = 10;
+					double textpos[3] = {
+						up[0] * text_offset + cam_pos[0],
+						up[1] * text_offset + cam_pos[1],
+						up[2] * text_offset + cam_pos[2]
+					};
+					double* boundary = LastActor->GetBounds();
+					std::ostringstream os;
+					os << "_Cube_" << actor_name;
+
+					auto color = cloudColors[LastActor_name];
+					viewer->addCube(boundary[0],
+						boundary[1],
+						boundary[2],
+						boundary[3],
+						boundary[4],
+						boundary[5],
+						color[0],
+						color[1],
+						color[2],
+						os.str());
+					auto cloud = clouds[actor_name];
+					viewer->setShapeRenderingProperties(
+						visualization::PCL_VISUALIZER_REPRESENTATION,
+						visualization::PCL_VISUALIZER_REPRESENTATION_WIREFRAME,
+						os.str());
+					viewer->removePointCloud(actor_name);
+					auto info = CalculatePart(cloud, actor_name, false);
+
+					static_infos[actor_name] = info;
+					bCal = false;
+				}
+			}
+			else if (event.keyDown() && event.getKeyCode() == 'd')
+			{
+				DumpNodes();
+			}
+		});
+
+	// switch visual mode
+	bool bWire = false;
+	viewer->registerKeyboardCallback(
+		[&bWire, this](
+			const visualization::KeyboardEvent event)
+		{
+			if (event.keyDown() && event.getKeyCode() == 'a' && !event.isAltPressed())
+			{
+				for (auto& actor : *viewer->getShapeActorMap())
+				{
+					if (!bWire)
+						viewer->setShapeRenderingProperties(
+							visualization::PCL_VISUALIZER_REPRESENTATION,
+							visualization::PCL_VISUALIZER_REPRESENTATION_WIREFRAME,
+							actor.first);
+					else
+						viewer->setShapeRenderingProperties(
+							visualization::PCL_VISUALIZER_REPRESENTATION,
+							visualization::PCL_VISUALIZER_REPRESENTATION_SURFACE,
+							actor.first);
+					bWire = !bWire;
+				}
+			}
+			else if (event.keyDown() &&
+				(event.getKeyCode() == 'b' || event.getKeyCode() == 'm'))
+			{
+				for (auto& actor : *viewer->getCloudActorMap())
+				{
+					double psize;
+					viewer->getPointCloudRenderingProperties(
+						visualization::PCL_VISUALIZER_POINT_SIZE,
+						psize,
+						actor.first);
+					viewer->setPointCloudRenderingProperties(
+						visualization::PCL_VISUALIZER_POINT_SIZE,
+						psize + (event.getKeyCode() == 'b' ? 1 : -1),
+						actor.first);
+				}
+			}
+			else if (event.keyDown() && event.getKeyCode() == 'a' && event.isAltPressed())
+			{
+				viewer->removeAllShapes();
+				viewer->addText("statistical info", 0, 300, 18, 1, 0, 1, "static_info");
+			}
+		});
+	ShowClouds();
+
+	//static_infos["Stem.pcd"] = CalculateStem(clouds["Stem.pcd"], "Stem", true);
+
 	while (!viewer->wasStopped())
 	{
 		viewer->spinOnce(100);
 	}
-
 }
 
-template<typename PointType>
-void sor_filter(typename pcl::PointCloud<PointType>::Ptr& src, int num)
+int main(
+	int argc,
+	char* argv[])
 {
-	//滤波离群点
-	pcl::StatisticalOutlierRemoval<PointType> sor;
-	sor.setInputCloud(src);
-	sor.setMeanK(num);
-	sor.setStddevMulThresh(1.0);
-	sor.filter(*src);
-}
-
-void SaveCluster(std::vector<pcl::PointIndices> cluster_indices, pcl::PointCloud<PointT>::Ptr cloud, std::string outfile, std::string prefix = "cluster")
-{
-	std::cout << "No of clusters formed are " << cluster_indices.size() << std::endl;
-	pcl::PLYWriter writer;
-
-	// Saving the clusters in separate pcd files
-	int j = 0;
-	for (const auto& cluster : cluster_indices)
+	fs::path folderPath = argv[1];
+	GaussianSeger Seger = GaussianSeger();
+	for (const auto& entry : fs::directory_iterator(folderPath))
 	{
-		pcl::PointCloud<PointT>::Ptr cloud_cluster(new pcl::PointCloud<PointT>);
-		for (const auto& index : cluster.indices) {
-			cloud_cluster->push_back((*cloud)[index]);
+		if (!is_directory(entry))
+		{
+			// Load cloud in blob format
+			auto file_name = entry.path().filename().string();
+			if (file_name.back() != 'd')
+				continue;
+			if (file_name[0] == 'l'||file_name[0] == 'L')
+				//continue;
+				Seger.LeafNum += 1;
+
+			PCLPointCloud2 blob;
+			io::loadPCDFile(entry.path().string(), blob);
+			PointCloud<PointT>::Ptr cloud(new PointCloud<PointT>);
+			std::cout << "Loading " << entry.path().filename().string() << std::endl;
+			fromPCLPointCloud2(blob, *cloud);
+			std::cout << "done.\n";
+			Seger.AddCloud(entry.path().filename().string(), cloud);
 		}
-		cloud_cluster->width = cloud_cluster->size();
-		cloud_cluster->height = 1;
-		cloud_cluster->is_dense = true;
-
-		std::cout << "PointCloud representing the Cluster using xyzn: " << cloud_cluster->size() << " data " << std::endl;
-		std::stringstream ss;
-		ss << "./" << outfile << "/" << prefix << "_" << j << ".ply";
-		writer.write<PointT>(ss.str(), *cloud_cluster, false);
-		++j;
 	}
+	time_t cur_time;
+	time(&cur_time);
+	srand(cur_time);
+	Seger.LaunchViewer();
 }
-
-void Euclidean(pcl::PointCloud<PointT>::Ptr cloud, float tolerance, unsigned int min_cluster_size, unsigned int max_cluster_size, std::vector<pcl::PointIndices>& cluster_indices)
-{
-	cout << "Euclidean cluster extraction :: " << cloud->points.size() << " data points." << endl;
-	pcl::gpu::Octree::PointCloud cloud_device;
-	cloud_device.upload(cloud->points);
-
-	pcl::gpu::Octree::Ptr octree_device(new pcl::gpu::Octree);
-	octree_device->setCloud(cloud_device);
-	octree_device->build();
-
-	pcl::gpu::EuclideanClusterExtraction<pcl::PointXYZ> gec;
-	gec.setClusterTolerance(tolerance); // 2cm
-	gec.setMinClusterSize(min_cluster_size);
-	gec.setMaxClusterSize(max_cluster_size);
-	gec.setSearchMethod(octree_device);
-	gec.setHostCloud(cloud);
-	gec.extract(cluster_indices);
-}
-
-void DisplayCloud(bool ShouldDisplay, pcl::PointCloud<PointT>::Ptr cloud)
-{
-	if (ShouldDisplay)
-		meshPointCloudandViewer(cloud);
-}
-
-int main(int argc, char* argv[])
-{
-	if (argc < 2) {
-		std::cerr << "Expected 2 arguments: inputfile outputfile" << std::endl;
-	}
-
-	///The file to read from.
-	std::string infile = argv[1];
-
-	///The file to output to.
-	std::string outfile = argv[2];
-	// Extracting Euclidean clusters using cloud and its normals
-	std::vector<pcl::PointIndices> cluster_indices;
-	float tolerance = 0.01f;
-	constexpr double eps_angle = 5 * (M_PI / 180.0);
-	constexpr unsigned int min_cluster_size = 50;
-	unsigned int max_cluster_size = 250000;
-	unsigned int max_large_cluster_size = 500000;
-	bool ShouldDisplay = false;
-	if (argc >= 4)
-		tolerance = atof(argv[3]);
-	if (argc >= 5)
-		max_cluster_size = atoi(argv[4]);
-	if (argc >= 6)
-		max_large_cluster_size = atoi(argv[5]);
-	if (argc >= 7)
-		ShouldDisplay = atoi(argv[6]) == 1;
-
-
-	// Load cloud in blob format
-	pcl::PCLPointCloud2 blob;
-	pcl::io::loadPLYFile(infile, blob);
-
-	pcl::PointCloud<PointT>::Ptr cloud(new pcl::PointCloud<PointT>);
-	pcl::PointCloud<PointNT>::Ptr normal(new pcl::PointCloud<PointNT>);
-	std::cout << "Loading point cloud...";
-	pcl::fromPCLPointCloud2(blob, *cloud);
-	pcl::fromPCLPointCloud2(blob, *normal, { {16,0,4},{20,4,4},{24,8,4} });
-	std::cout << "done." << std::endl;
-
-	SegPart(cloud, normal);
-	DisplayCloud(ShouldDisplay, cloud);
-	SegPart(cloud, normal);
-	DisplayCloud(ShouldDisplay, cloud);
-
-	sor_filter<PointT>(cloud, 15);
-
-
-
-#if USE_GPU
-	Euclidean(cloud, tolerance, min_cluster_size, max_cluster_size, cluster_indices);
-#else
-
-	pcl::KdTree<PointT>::Ptr tree_ec(new pcl::KdTreeFLANN<PointT>());
-	tree_ec->setInputCloud(cloud);
-	pcl::extractEuclideanClusters(*cloud, *cloud, tolerance, tree_ec, cluster_indices, eps_angle, min_cluster_size);
-#endif
-	SaveCluster(cluster_indices, cloud, outfile);
-
-	PointIndices::Ptr all_ind_ptr(new PointIndices());
-	for (auto& indices : cluster_indices)
-	{
-		all_ind_ptr->indices.insert(all_ind_ptr->indices.end(), indices.indices.begin(), indices.indices.end());
-	}
-
-	cloud = Extract<PointT>(cloud, all_ind_ptr);
-	DisplayCloud(ShouldDisplay, cloud);
-	cluster_indices.clear();
-
-	sor_filter<PointT>(cloud, 15);
-	Euclidean(cloud, tolerance, min_cluster_size, max_large_cluster_size, cluster_indices);
-	SaveCluster(cluster_indices, cloud, outfile, "large_cluster");
-}
-
-
-/*
-int main(int argc, char** argv)
-{
-
-	// 读取OBJ文件
-	pcl::PolygonMesh mesh;
-	pcl::PCLPointCloud2 PCLcloud;
-	if (pcl::io::loadPLYFile(argv[1], PCLcloud) == -1)  // 文件路径
-	{
-		PCL_ERROR("Couldn't read OBJ file\n");
-		return -1;
-	}
-
-	// 网格顶点转换为点云
-	pcl::PointCloud<pcl::PointXYZRGBNormal>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZRGBNormal>);
-	pcl::fromPCLPointCloud2(PCLcloud, *cloud);
-
-
-	pcl::PointCloud<PointNT>::Ptr doncloud (new pcl::PointCloud<PointNT>);
-	copyPointCloud<pcl::PointXYZRGBNormal, PointNT>(*cloud, *doncloud);
-
-	pcl::DifferenceOfNormalsEstimation<PointT, PointNT, PointNT> don;
-	don.setInputCloud (cloud);
-	don.setNormalScaleLarge (normals_large_scale);
-	don.setNormalScaleSmall (normals_small_scale); don.initCompute ();
-	// Compute DoN
-	don.computeFeature (*doncloud);
-
-
-
-	meshPointCloudandViewer(mesh, cloud);
-
-	return 0;
-}
-*/
