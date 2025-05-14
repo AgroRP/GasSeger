@@ -3,5 +3,4 @@ build
 out
 *CMakeFiles
 PartViewer
-ReCon
 CMakePresets.json
