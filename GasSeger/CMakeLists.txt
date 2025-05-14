@@ -21,6 +21,8 @@ link_directories(${VTK_LIBRARY_DIRS})
 add_definitions(${VTK_DEFINITIONS})
 list(REMOVE_ITEM PCL_LIBRARIES pcl_surface)
 target_link_libraries (GasSeger PUBLIC ${PCL_LIBRARIES})
+
+# TODO:: change this to your PCL lib
 set(ENV_PATH "PATH=C:/Program Files/PCL 1.13.0/bin;C:/Program Files/PCL 1.13.0/3rdParty/VTK/bin;C:/Program Files/PCL 1.13.0/3rdParty/flann/bin;")
 set_property(TARGET GasSeger PROPERTY
 	VS_DEBUGGER_ENVIRONMENT
